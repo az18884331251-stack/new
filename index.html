@@ -2539,21 +2539,57 @@
     if (file) setSelectedFile(file);
   });
 
-  importConfirmBtn.addEventListener('click', () => {
+  const BACKEND_URL = 'http://localhost:8000';
+
+  importConfirmBtn.addEventListener('click', async () => {
     if (!importConfirmBtn.classList.contains('active')) return;
     const file = fileInput.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target.result;
-      const bookTitle = file.name.replace(/\.(txt|md)$/i, '');
-      const chapters = parseBookToChapters(text, file.name);
+
+    // loading state
+    importConfirmBtn.textContent = 'AI 生成中…';
+    importConfirmBtn.classList.remove('active');
+    importConfirmBtn.disabled = true;
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || '上传失败');
+      }
+
+      const data = await res.json();
       const bookId = 'book_' + Date.now();
-      localStorage.setItem('book_' + bookId, JSON.stringify({ title: bookTitle, chapters }));
-      addBookCardToShelf(bookId, bookTitle);
+      localStorage.setItem('book_' + bookId, JSON.stringify({ title: data.title, chapters: data.chapters }));
+      addBookCardToShelf(bookId, data.title);
       closeModal('importModal');
-    };
-    reader.readAsText(file, 'UTF-8');
+
+    } catch (e) {
+      // backend unavailable — fall back to client-side parsing
+      if (e instanceof TypeError && e.message.includes('fetch')) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const text = ev.target.result;
+          const bookTitle = file.name.replace(/\.(txt|md)$/i, '');
+          const chapters = parseBookToChapters(text, file.name);
+          const bookId = 'book_' + Date.now();
+          localStorage.setItem('book_' + bookId, JSON.stringify({ title: bookTitle, chapters }));
+          addBookCardToShelf(bookId, bookTitle);
+          closeModal('importModal');
+        };
+        reader.readAsText(file, 'UTF-8');
+      } else {
+        importConfirmBtn.textContent = e.message;
+        setTimeout(() => {
+          importConfirmBtn.textContent = '确认导入';
+          importConfirmBtn.classList.add('active');
+          importConfirmBtn.disabled = false;
+        }, 2500);
+      }
+    }
   });
 
   function parseBookToChapters(text, filename) {
@@ -2653,6 +2689,7 @@
     fileUploadArea.classList.remove('drag-over');
     fileInput.value = '';
     setSelectedFile(null);
+    importConfirmBtn.textContent = '确认导入';
   }
 
   // Search bar focus
