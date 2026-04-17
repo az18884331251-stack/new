@@ -2084,15 +2084,12 @@
         <button class="modal-close" onclick="closeModal('importModal')">✕</button>
       </div>
       <div class="modal-body">
-        <div class="modal-option" id="importOptFile">📁 从文件导入</div>
-        <div class="file-upload-area" id="fileUploadArea">
-          <input type="file" id="fileInput" accept=".epub,.pdf,.txt" style="display:none">
+        <div class="file-upload-area visible" id="fileUploadArea">
+          <input type="file" id="fileInput" accept=".txt,.md" style="display:none">
           <div class="file-upload-icon">📂</div>
-          <div class="file-upload-hint">点击选择文件，或拖拽到这里<br><strong>支持 EPUB · PDF · TXT</strong></div>
+          <div class="file-upload-hint">点击选择文件，或拖拽到这里<br><strong>支持 TXT · MD</strong></div>
           <div class="file-upload-name" id="fileUploadName"></div>
         </div>
-        <div class="modal-option" id="importOptLink">🔗 从链接导入</div>
-        <div class="modal-option" id="importOptCloud">☁️ 云端同步</div>
         <button class="modal-confirm-btn" id="importConfirmBtn" disabled>确认导入</button>
       </div>
     </div>
@@ -2568,21 +2565,10 @@
   });
 
   // Import modal — file upload logic
-  const importOptFile  = document.getElementById('importOptFile');
-  const importOptLink  = document.getElementById('importOptLink');
-  const importOptCloud = document.getElementById('importOptCloud');
-  const fileUploadArea = document.getElementById('fileUploadArea');
-  const fileInput      = document.getElementById('fileInput');
-  const fileUploadName = document.getElementById('fileUploadName');
+  const fileUploadArea   = document.getElementById('fileUploadArea');
+  const fileInput        = document.getElementById('fileInput');
+  const fileUploadName   = document.getElementById('fileUploadName');
   const importConfirmBtn = document.getElementById('importConfirmBtn');
-
-  function selectImportOpt(selected) {
-    [importOptFile, importOptLink, importOptCloud].forEach(el => el.classList.remove('selected'));
-    selected.classList.add('selected');
-    const isFile = selected === importOptFile;
-    fileUploadArea.classList.toggle('visible', isFile);
-    if (!isFile) { setSelectedFile(null); }
-  }
 
   function setSelectedFile(file) {
     if (file) {
@@ -2596,10 +2582,6 @@
       importConfirmBtn.disabled = true;
     }
   }
-
-  importOptFile.addEventListener('click', () => selectImportOpt(importOptFile));
-  importOptLink.addEventListener('click', () => selectImportOpt(importOptLink));
-  importOptCloud.addEventListener('click', () => selectImportOpt(importOptCloud));
 
   fileUploadArea.addEventListener('click', () => fileInput.click());
 
@@ -2629,8 +2611,7 @@
   });
 
   function resetImportModal() {
-    [importOptFile, importOptLink, importOptCloud].forEach(el => el.classList.remove('selected'));
-    fileUploadArea.classList.remove('visible');
+    fileUploadArea.classList.remove('drag-over');
     fileInput.value = '';
     setSelectedFile(null);
   }
