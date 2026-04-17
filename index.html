@@ -1579,6 +1579,69 @@
     font-weight: 700;
   }
 
+  .file-upload-area {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px 16px;
+    border-radius: 12px;
+    border: 2px dashed #d0d0d0;
+    background: #fafafa;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-top: -4px;
+  }
+  .file-upload-area.visible { display: flex; }
+  .file-upload-area:hover, .file-upload-area.drag-over {
+    border-color: #30cf7b;
+    background: rgba(48, 207, 123, 0.04);
+  }
+  .file-upload-icon { font-size: 28px; line-height: 1; }
+  .file-upload-hint {
+    font-size: 13px;
+    color: #8b8c8e;
+    text-align: center;
+    line-height: 1.5;
+  }
+  .file-upload-hint strong { color: #30cf7b; font-weight: 700; }
+  .file-upload-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #24242c;
+    background: rgba(48, 207, 123, 0.1);
+    border-radius: 8px;
+    padding: 4px 10px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: none;
+  }
+  .file-upload-name.visible { display: block; }
+
+  .modal-confirm-btn {
+    margin-top: 4px;
+    width: 100%;
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    background: #e0e0e0;
+    color: #aaa;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: not-allowed;
+    transition: background 0.2s, color 0.2s;
+    font-family: inherit;
+  }
+  .modal-confirm-btn.active {
+    background: #30cf7b;
+    color: #fff;
+    cursor: pointer;
+  }
+  .modal-confirm-btn.active:hover { background: #28ba6e; }
+  .modal-confirm-btn.active:active { transform: scale(0.98); }
+
   /* AI Chat Modal */
   .ai-modal-sheet {
     width: 100%;
@@ -2021,9 +2084,16 @@
         <button class="modal-close" onclick="closeModal('importModal')">✕</button>
       </div>
       <div class="modal-body">
-        <div class="modal-option" onclick="this.classList.toggle('selected')">📁 从文件导入</div>
-        <div class="modal-option" onclick="this.classList.toggle('selected')">🔗 从链接导入</div>
-        <div class="modal-option" onclick="this.classList.toggle('selected')">☁️ 云端同步</div>
+        <div class="modal-option" id="importOptFile">📁 从文件导入</div>
+        <div class="file-upload-area" id="fileUploadArea">
+          <input type="file" id="fileInput" accept=".epub,.pdf,.txt" style="display:none">
+          <div class="file-upload-icon">📂</div>
+          <div class="file-upload-hint">点击选择文件，或拖拽到这里<br><strong>支持 EPUB · PDF · TXT</strong></div>
+          <div class="file-upload-name" id="fileUploadName"></div>
+        </div>
+        <div class="modal-option" id="importOptLink">🔗 从链接导入</div>
+        <div class="modal-option" id="importOptCloud">☁️ 云端同步</div>
+        <button class="modal-confirm-btn" id="importConfirmBtn" disabled>确认导入</button>
       </div>
     </div>
   </div>
@@ -2497,6 +2567,74 @@
     sidebarOverlay.classList.remove('show');
   });
 
+  // Import modal — file upload logic
+  const importOptFile  = document.getElementById('importOptFile');
+  const importOptLink  = document.getElementById('importOptLink');
+  const importOptCloud = document.getElementById('importOptCloud');
+  const fileUploadArea = document.getElementById('fileUploadArea');
+  const fileInput      = document.getElementById('fileInput');
+  const fileUploadName = document.getElementById('fileUploadName');
+  const importConfirmBtn = document.getElementById('importConfirmBtn');
+
+  function selectImportOpt(selected) {
+    [importOptFile, importOptLink, importOptCloud].forEach(el => el.classList.remove('selected'));
+    selected.classList.add('selected');
+    const isFile = selected === importOptFile;
+    fileUploadArea.classList.toggle('visible', isFile);
+    if (!isFile) { setSelectedFile(null); }
+  }
+
+  function setSelectedFile(file) {
+    if (file) {
+      fileUploadName.textContent = file.name;
+      fileUploadName.classList.add('visible');
+      importConfirmBtn.classList.add('active');
+      importConfirmBtn.disabled = false;
+    } else {
+      fileUploadName.classList.remove('visible');
+      importConfirmBtn.classList.remove('active');
+      importConfirmBtn.disabled = true;
+    }
+  }
+
+  importOptFile.addEventListener('click', () => selectImportOpt(importOptFile));
+  importOptLink.addEventListener('click', () => selectImportOpt(importOptLink));
+  importOptCloud.addEventListener('click', () => selectImportOpt(importOptCloud));
+
+  fileUploadArea.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setSelectedFile(fileInput.files[0]);
+  });
+
+  fileUploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    fileUploadArea.classList.add('drag-over');
+  });
+  fileUploadArea.addEventListener('dragleave', () => fileUploadArea.classList.remove('drag-over'));
+  fileUploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    fileUploadArea.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) setSelectedFile(file);
+  });
+
+  importConfirmBtn.addEventListener('click', () => {
+    if (!importConfirmBtn.classList.contains('active')) return;
+    const file = fileInput.files[0];
+    if (!file) return;
+    // TODO: send file to backend API POST /api/upload
+    alert(`已选择：${file.name}\n后端接入后将自动上传`);
+    closeModal('importModal');
+  });
+
+  function resetImportModal() {
+    [importOptFile, importOptLink, importOptCloud].forEach(el => el.classList.remove('selected'));
+    fileUploadArea.classList.remove('visible');
+    fileInput.value = '';
+    setSelectedFile(null);
+  }
+
   // Search bar focus
   const searchBar = document.getElementById('searchBar');
   const searchInput = document.getElementById('searchInput');
@@ -2562,12 +2700,16 @@
   }
   function closeModal(id) {
     document.getElementById(id).classList.remove('show');
+    if (id === 'importModal') resetImportModal();
   }
 
   // Close modal on overlay click
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.classList.remove('show');
+      if (e.target === overlay) {
+        overlay.classList.remove('show');
+        if (overlay.id === 'importModal') resetImportModal();
+      }
     });
   });
 
