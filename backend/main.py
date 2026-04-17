@@ -96,9 +96,14 @@ def parse_txt(text: str) -> list[dict]:
     return [{"title": "全文", "sections": sections}]
 
 
+# Detect Chinese outline headings like "一、标题" / "二、" and numbered "1. 标题" / "1、"
+_H1_RE = re.compile(r"^[一二三四五六七八九十]+[、．.]\s*\S")
+_H2_RE = re.compile(r"^\d+[\.、．]\s*\S")
+
+
 def docx_to_text(raw: bytes) -> str:
-    """Extract plain text from .docx, preserving Heading 1/2 as # / ## markers so parse_md can split.
-    Each non-heading paragraph is followed by a blank line so parse_txt's blank-line splitter works."""
+    """Extract plain text from .docx.
+    Detects Word heading styles AND Chinese outline numbering (一、二、 / 1. 2.) as headings."""
     doc = Document(io.BytesIO(raw))
     lines = []
     for p in doc.paragraphs:
@@ -106,13 +111,13 @@ def docx_to_text(raw: bytes) -> str:
         if not text:
             continue
         style = (p.style.name or "").lower() if p.style else ""
-        if style.startswith("heading 1") or style == "title":
+        if style.startswith("heading 1") or style == "title" or _H1_RE.match(text):
             lines.append(f"# {text}")
-        elif style.startswith("heading 2") or style.startswith("heading 3"):
+        elif style.startswith("heading 2") or style.startswith("heading 3") or _H2_RE.match(text):
             lines.append(f"## {text}")
         else:
             lines.append(text)
-            lines.append("")  # blank line between paragraphs
+            lines.append("")  # blank line between body paragraphs
     return "\n".join(lines)
 
 
