@@ -2452,9 +2452,9 @@
     </div>
     <div class="modal-body">
       <div class="file-upload-area visible" id="fileUploadArea">
-        <input type="file" id="fileInput" accept=".txt,.md" style="display:none">
+        <input type="file" id="fileInput" accept=".txt,.md,.docx,.doc" style="display:none">
         <div class="file-upload-icon">📂</div>
-        <div class="file-upload-hint">点击选择文件，或拖拽到这里<br><strong>支持 TXT · MD</strong></div>
+        <div class="file-upload-hint">点击选择文件，或拖拽到这里<br><strong>支持 TXT · MD · DOCX</strong></div>
         <div class="file-upload-name" id="fileUploadName"></div>
       </div>
       <button class="modal-confirm-btn" id="importConfirmBtn" disabled>确认导入</button>
@@ -2577,7 +2577,7 @@
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target.result;
-          const bookTitle = file.name.replace(/\.(txt|md)$/i, '');
+          const bookTitle = file.name.replace(/\.(txt|md|docx|doc)$/i, '');
           const chapters = parseBookToChapters(text, file.name);
           const bookId = 'book_' + Date.now();
           localStorage.setItem('book_' + bookId, JSON.stringify({ title: bookTitle, chapters }));

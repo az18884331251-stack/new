@@ -1,12 +1,13 @@
-import os, re, chardet
+import os, re, io, chardet
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from google import genai
+from zhipuai import ZhipuAI
+from docx import Document
 
 load_dotenv()
 
-gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+zhipu = ZhipuAI(api_key=os.getenv("ZHIPUAI_API_KEY"))
 
 app = FastAPI()
 app.add_middleware(
@@ -95,16 +96,48 @@ def parse_txt(text: str) -> list[dict]:
     return [{"title": "全文", "sections": sections}]
 
 
-def parse_book(filename: str, text: str) -> list[dict]:
-    return parse_md(text) if filename.lower().endswith(".md") else parse_txt(text)
+def docx_to_text(raw: bytes) -> str:
+    """Extract plain text from .docx, preserving Heading 1/2 as # / ## markers so parse_md can split."""
+    doc = Document(io.BytesIO(raw))
+    lines = []
+    for p in doc.paragraphs:
+        text = p.text.strip()
+        if not text:
+            lines.append("")
+            continue
+        style = (p.style.name or "").lower() if p.style else ""
+        if style.startswith("heading 1") or style == "title":
+            lines.append(f"# {text}")
+        elif style.startswith("heading 2") or style.startswith("heading 3"):
+            lines.append(f"## {text}")
+        else:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def parse_book(filename: str, raw: bytes) -> tuple[str, list[dict]]:
+    name = filename.lower()
+    if name.endswith(".docx"):
+        text = docx_to_text(raw)
+        # Use MD parser if headings detected, else fall back to TXT chapter detection
+        return text, (parse_md(text) if re.search(r"^#+ ", text, re.M) else parse_txt(text))
+    text = decode_file(raw)
+    if name.endswith(".md"):
+        return text, parse_md(text)
+    return text, parse_txt(text)
 
 
 def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
     """Call Gemini with only the first CHARS_PER_SECTION characters of content."""
     snippet = content.strip()[:CHARS_PER_SECTION]
-    prompt = f"{SYSTEM_PROMPT}\n\n章节：{chapter_title}\n小节：{section_title}\n\n内容（节选）：\n{snippet}"
-    response = gemini.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-    raw = response.text.strip()
+    response = zhipu.chat.completions.create(
+        model="glm-4-flash",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"章节：{chapter_title}\n小节：{section_title}\n\n内容（节选）：\n{snippet}"}
+        ]
+    )
+    raw = response.choices[0].message.content.strip()
     # extract JSON even if model adds surrounding text
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
@@ -115,16 +148,22 @@ def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
 
 @app.post("/upload")
 async def upload_book(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith((".txt", ".md")):
-        raise HTTPException(400, "只支持 .txt 和 .md 文件")
+    name = file.filename.lower()
+    if name.endswith(".doc") and not name.endswith(".docx"):
+        raise HTTPException(400, "暂不支持 .doc 旧格式，请在 Word 中另存为 .docx 后再上传")
+    if not name.endswith((".txt", ".md", ".docx")):
+        raise HTTPException(400, "只支持 .txt / .md / .docx 文件")
 
     raw = await file.read()
     if len(raw) > 5 * 1024 * 1024:  # 5 MB limit
         raise HTTPException(400, "文件不能超过 5MB")
 
-    text = decode_file(raw)
-    chapters = parse_book(file.filename, text)
-    book_title = re.sub(r"\.(txt|md)$", "", file.filename, flags=re.I)
+    try:
+        text, chapters = parse_book(file.filename, raw)
+    except Exception as e:
+        raise HTTPException(400, f"文件解析失败：{e}")
+
+    book_title = re.sub(r"\.(txt|md|docx)$", "", file.filename, flags=re.I)
 
     result_chapters = []
     for ch in chapters:
