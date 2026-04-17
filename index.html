@@ -2462,6 +2462,29 @@
   </div>
 </div>
 
+<!-- API Key Modal -->
+<div class="modal-overlay" id="apiKeyModal">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <div class="modal-title">配置 AI 功能</div>
+      <button class="modal-close" onclick="closeModal('apiKeyModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px;color:#555;margin-bottom:16px;line-height:1.6">
+        导入时使用 AI 自动生成 QA 卡片，需要 ZhipuAI API Key。<br>
+        没有可以<a href="https://open.bigmodel.cn" target="_blank" style="color:#30cf7b">免费注册获取</a>，或跳过使用基础模式。
+      </p>
+      <input type="text" id="apiKeyInput" placeholder="粘贴你的 API Key（glm-...）"
+        style="width:100%;padding:12px;border:1px solid #e0e0e0;border-radius:10px;font-size:14px;outline:none;margin-bottom:12px">
+      <button class="modal-confirm-btn active" id="apiKeySaveBtn" style="margin-bottom:8px">保存并导入</button>
+      <button class="modal-confirm-btn" id="apiKeySkipBtn"
+        style="background:#f0f0f2;color:#555;border:none;width:100%;padding:14px;border-radius:12px;font-size:16px;cursor:pointer">
+        跳过，不使用 AI
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- AI Chat Modal (outside phone-frame) -->
 <div class="modal-overlay" id="aiModal">
   <div class="ai-modal-sheet">
@@ -2543,21 +2566,27 @@
   });
 
   const BACKEND_URL = 'https://scintillating-delight-production.up.railway.app';
+  const API_KEY_STORAGE = 'zhipu_api_key';
 
-  importConfirmBtn.addEventListener('click', async () => {
-    if (!importConfirmBtn.classList.contains('active')) return;
-    const file = selectedFile;
-    if (!file) return;
+  function getSavedApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ''; }
 
-    // loading state
-    importConfirmBtn.textContent = 'AI 生成中…';
+  // ── Upload with optional API key ──────────────────────────────────────────
+  async function doUpload(file, apiKey) {
+    importConfirmBtn.textContent = apiKey ? 'AI 生成中…' : '导入中…';
     importConfirmBtn.classList.remove('active');
     importConfirmBtn.disabled = true;
+
+    const resetBtn = () => {
+      importConfirmBtn.textContent = '确认导入';
+      importConfirmBtn.classList.add('active');
+      importConfirmBtn.disabled = false;
+    };
 
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+      const headers = apiKey ? { 'X-API-Key': apiKey } : {};
+      const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData, headers });
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -2571,9 +2600,9 @@
       closeModal('importModal');
 
     } catch (e) {
-      // backend unavailable (localhost, CORS, mixed content, network) — fall back to client-side
       const isNetworkError = e instanceof TypeError || e.name === 'TypeError';
       if (isNetworkError) {
+        // Backend unreachable → full client-side fallback
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target.result;
@@ -2587,13 +2616,44 @@
         reader.readAsText(file, 'UTF-8');
       } else {
         importConfirmBtn.textContent = e.message;
-        setTimeout(() => {
-          importConfirmBtn.textContent = '确认导入';
-          importConfirmBtn.classList.add('active');
-          importConfirmBtn.disabled = false;
-        }, 2500);
+        setTimeout(resetBtn, 2500);
       }
     }
+  }
+
+  // ── Confirm import: check API key first ───────────────────────────────────
+  importConfirmBtn.addEventListener('click', () => {
+    if (!importConfirmBtn.classList.contains('active')) return;
+    const file = selectedFile;
+    if (!file) return;
+
+    const savedKey = getSavedApiKey();
+    if (savedKey) {
+      // Key already saved → upload immediately
+      doUpload(file, savedKey);
+    } else {
+      // No key → show API key modal
+      document.getElementById('apiKeyInput').value = '';
+      closeModal('importModal');
+      document.getElementById('apiKeyModal').classList.add('show');
+    }
+  });
+
+  // ── API Key modal buttons ─────────────────────────────────────────────────
+  document.getElementById('apiKeySaveBtn').addEventListener('click', () => {
+    const key = document.getElementById('apiKeyInput').value.trim();
+    if (!key) { document.getElementById('apiKeyInput').style.borderColor = '#ff4d4f'; return; }
+    localStorage.setItem(API_KEY_STORAGE, key);
+    closeModal('apiKeyModal');
+    // Re-open import modal with the file still selected
+    document.getElementById('importModal').classList.add('show');
+    doUpload(selectedFile, key);
+  });
+
+  document.getElementById('apiKeySkipBtn').addEventListener('click', () => {
+    closeModal('apiKeyModal');
+    document.getElementById('importModal').classList.add('show');
+    doUpload(selectedFile, '');
   });
 
   function parseBookToChapters(text, filename) {

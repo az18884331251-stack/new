@@ -1,13 +1,11 @@
 import os, re, io, json, chardet
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from zhipuai import ZhipuAI
 from docx import Document
 
 load_dotenv()
-
-zhipu = ZhipuAI(api_key=os.getenv("ZHIPUAI_API_KEY"))
 
 app = FastAPI()
 app.add_middleware(
@@ -203,9 +201,9 @@ def parse_book(filename: str, raw: bytes) -> tuple[str, list[dict]]:
     return text, normalize_sections(chapters)
 
 
-def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
+def generate_qa(section_title: str, chapter_title: str, content: str, client: ZhipuAI) -> dict:
     snippet = content.strip()[:CHARS_PER_SECTION]
-    response = zhipu.chat.completions.create(
+    response = client.chat.completions.create(
         model="glm-4-flash",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -219,8 +217,16 @@ def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
     return json.loads(m.group())
 
 
+def make_client(api_key: str | None) -> ZhipuAI | None:
+    key = api_key or os.getenv("ZHIPUAI_API_KEY")
+    return ZhipuAI(api_key=key) if key else None
+
+
 @app.post("/upload")
-async def upload_book(file: UploadFile = File(...)):
+async def upload_book(
+    file: UploadFile = File(...),
+    x_api_key: str | None = Header(default=None),
+):
     name = file.filename.lower()
     if name.endswith(".doc") and not name.endswith(".docx"):
         raise HTTPException(400, "暂不支持 .doc 旧格式，请在 Word 中另存为 .docx 后再上传")
@@ -237,6 +243,7 @@ async def upload_book(file: UploadFile = File(...)):
         raise HTTPException(400, f"文件解析失败：{e}")
 
     book_title = re.sub(r"\.(txt|md|docx)$", "", file.filename, flags=re.I)
+    client = make_client(x_api_key)
 
     result_chapters = []
     for ch in chapters:
@@ -245,18 +252,22 @@ async def upload_book(file: UploadFile = File(...)):
             content = sec["content"].strip()
             if not content:
                 continue
-            try:
-                qa = generate_qa(sec["title"], ch["title"], content)
-                paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
-                cards.append({
-                    "title": sec["title"],
-                    "q": qa.get("question", sec["title"] + "的核心内容是什么？"),
-                    "a": qa.get("answer", ""),
-                    "ps": 1,
-                    "p": ["".join(f"<p>{p}</p>" for p in paras)]
-                })
-            except Exception:
-                continue
+            paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
+            q, a = sec["title"] + "的核心内容是什么？", ""
+            if client:
+                try:
+                    qa = generate_qa(sec["title"], ch["title"], content, client)
+                    q = qa.get("question", q)
+                    a = qa.get("answer", "")
+                except Exception:
+                    pass  # fall back to rule-based title if AI fails
+            cards.append({
+                "title": sec["title"],
+                "q": q,
+                "a": a,
+                "ps": 1,
+                "p": ["".join(f"<p>{p}</p>" for p in paras)]
+            })
 
         if cards:
             result_chapters.append({"title": ch["title"], "cards": cards})
