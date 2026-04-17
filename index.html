@@ -2886,9 +2886,28 @@
   const swipeDots = document.querySelectorAll('.swipe-dot');
 
   let currentPage = 0;
-  const totalPages = 3;
-  const pageNumbers = ['42/2124', '43/2124', '44/2124'];
+  let totalPages = 3;
+  let pageNumbers = ['42/2124', '43/2124', '44/2124'];
   let toolbarVisible = false;
+
+  function renderReaderPages(chapters) {
+    // Flatten all cards into reader pages
+    const cards = chapters.flatMap(ch => ch.cards);
+    let html = '';
+    cards.forEach((card, i) => {
+      const body = (card.p && card.p.length) ? card.p.join('') : `<p>${card.a || ''}</p>`;
+      html += `<div class="reader-page">
+        ${i === 0 ? `<div class="reader-page-title">${card.title || ''}</div>` : ''}
+        <div class="reader-page-body">${body}</div>
+      </div>`;
+    });
+    readerPagesWrapper.innerHTML = html;
+    totalPages = Math.max(1, cards.length);
+    readerPagesWrapper.style.width = `${totalPages * 100}%`;
+    pageNumbers = cards.map((_, i) => `${i + 1}/${cards.length}`);
+    // re-query swipe dots? we keep the original 3 dots — just hide/show based on page count
+    // (keep existing dots untouched; updateReaderPage handles bounds)
+  }
 
   // Click book card → open reader (simple mode, toolbar hidden)
   document.getElementById('bookGrid').addEventListener('click', (e) => {
@@ -2914,10 +2933,18 @@
   // Update page position & indicators
   function updateReaderPage() {
     readerPagesWrapper.style.transform = `translateX(-${currentPage * 393}px)`;
-    document.getElementById('readerPageNum').textContent = pageNumbers[currentPage];
-    swipeDots.forEach((dot, i) => {
-      dot.classList.toggle('active', i === currentPage);
-    });
+    document.getElementById('readerPageNum').textContent = pageNumbers[currentPage] || `${currentPage + 1}/${totalPages}`;
+    // Rebuild dots to match totalPages
+    const dotsContainer = document.getElementById('swipeIndicator');
+    if (dotsContainer && dotsContainer.children.length !== totalPages) {
+      dotsContainer.innerHTML = Array.from({length: totalPages}, (_, i) =>
+        `<div class="swipe-dot${i === currentPage ? ' active' : ''}"></div>`
+      ).join('');
+    } else {
+      dotsContainer.querySelectorAll('.swipe-dot').forEach((dot, i) => {
+        dot.classList.toggle('active', i === currentPage);
+      });
+    }
   }
 
   // Toggle toolbar overlay (bars slide in/out, text stays put)
@@ -3176,6 +3203,7 @@
   function loadBook(chapters) {
     cardData = chapters.flatMap(ch => ch.cards);
     renderChapterCards(chapters);
+    renderReaderPages(chapters);
   }
 
   // Load default book on init
