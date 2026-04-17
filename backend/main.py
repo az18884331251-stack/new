@@ -1,4 +1,4 @@
-import os, re, io, chardet
+import os, re, io, json, chardet
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -17,7 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CHARS_PER_SECTION = 1000  # only first N chars of each section sent to AI
+CHARS_PER_SECTION = 1000  # chars sent to AI per section
+CHUNK_CHARS = 800          # max chars per reader page (long sections get split)
+MIN_SECTION_CHARS = 150    # sections shorter than this get merged into the previous
 
 SYSTEM_PROMPT = """\
 你是一个帮助读者判断"这一章值不值得读"的助手。
@@ -45,10 +47,56 @@ def decode_file(raw: bytes) -> str:
     return raw.decode(encoding, errors="replace")
 
 
-def parse_md(text: str) -> list[dict]:
-    """Split MD by # / ## headings into chapters with sections."""
-    chapters, cur_chapter, cur_section = [], None, None
+# ── Heading detection patterns ──────────────────────────────────────────────
+# H1: 一、标题 / 第一章 / Chapter 1 / I. Title / 壹、
+_H1_RE = re.compile(
+    r"^("
+    r"[一二三四五六七八九十百千壹贰叁肆伍陆柒捌玖拾]+[、．.]\s*\S"  # 一、二、
+    r"|第[零一二三四五六七八九十百千\d]+[章节部卷篇]"               # 第一章
+    r"|Chapter\s+\d"                                                  # Chapter 1
+    r"|[IVX]+\.\s+\S"                                                # I. II.
+    r")", re.I
+)
+# H2: 1. 标题 / 1、标题 / (一) / 1.1 / a. b.
+_H2_RE = re.compile(
+    r"^("
+    r"\d+[\.\s、．]\s*\S"                          # 1. 1、
+    r"|\d+\.\d+[\.\s]\s*\S"                        # 1.1 1.2
+    r"|[（(][一二三四五六七八九十\d]+[）)]\s*\S"   # (一) （1）
+    r"|[a-z][\.\)]\s+\S"                           # a. b)
+    r")", re.I
+)
 
+def _is_heading1(text: str, style: str) -> bool:
+    return style.startswith("heading 1") or style == "title" or bool(_H1_RE.match(text))
+
+def _is_heading2(text: str, style: str) -> bool:
+    return (style.startswith("heading 2") or style.startswith("heading 3")
+            or bool(_H2_RE.match(text)))
+
+
+# ── Docx → marked-up text ───────────────────────────────────────────────────
+def docx_to_text(raw: bytes) -> str:
+    doc = Document(io.BytesIO(raw))
+    lines = []
+    for p in doc.paragraphs:
+        text = p.text.strip()
+        if not text:
+            continue
+        style = (p.style.name or "").lower() if p.style else ""
+        if _is_heading1(text, style):
+            lines.append(f"# {text}")
+        elif _is_heading2(text, style):
+            lines.append(f"## {text}")
+        else:
+            lines.append(text)
+            lines.append("")   # blank line so parse_txt can split paragraphs
+    return "\n".join(lines)
+
+
+# ── Markdown parser ──────────────────────────────────────────────────────────
+def parse_md(text: str) -> list[dict]:
+    chapters, cur_chapter, cur_section = [], None, None
     for line in text.splitlines():
         if re.match(r"^# ", line):
             cur_chapter = {"title": line[2:].strip(), "sections": []}
@@ -69,15 +117,14 @@ def parse_md(text: str) -> list[dict]:
                 cur_chapter["sections"].append(cur_section)
                 cur_section = cur_chapter["sections"][-1]
             cur_section["content"] += line + "\n"
-
     return chapters or [{"title": "全文", "sections": [{"title": "全文", "content": text}]}]
 
 
+# ── Plain-text parser ────────────────────────────────────────────────────────
 def parse_txt(text: str) -> list[dict]:
-    """Split TXT by 第X章 markers; fall back to blank-line paragraphs."""
+    """Try 第X章 markers; fall back to blank-line paragraph blocks."""
     chapter_re = re.compile(r"^(第[零一二三四五六七八九十百千\d]+[章节部卷篇][^\n]{0,40})", re.M)
     matches = list(chapter_re.finditer(text))
-
     if matches:
         chapters = []
         for i, m in enumerate(matches):
@@ -90,49 +137,41 @@ def parse_txt(text: str) -> list[dict]:
             })
         return chapters
 
-    # fallback: treat each paragraph block as a section
+    # fallback: each blank-line-separated block is a section
     blocks = [b.strip() for b in re.split(r"\n{2,}", text) if b.strip()]
+    if not blocks:
+        return [{"title": "全文", "sections": [{"title": "全文", "content": text}]}]
     sections = [{"title": b.splitlines()[0][:40], "content": b} for b in blocks]
     return [{"title": "全文", "sections": sections}]
 
 
-# Detect Chinese outline headings like "一、标题" / "二、" and numbered "1. 标题" / "1、"
-_H1_RE = re.compile(r"^[一二三四五六七八九十]+[、．.]\s*\S")
-_H2_RE = re.compile(r"^\d+[\.、．]\s*\S")
-
-
-def docx_to_text(raw: bytes) -> str:
-    """Extract plain text from .docx.
-    Detects Word heading styles AND Chinese outline numbering (一、二、 / 1. 2.) as headings."""
-    doc = Document(io.BytesIO(raw))
-    lines = []
-    for p in doc.paragraphs:
-        text = p.text.strip()
-        if not text:
-            continue
-        style = (p.style.name or "").lower() if p.style else ""
-        if style.startswith("heading 1") or style == "title" or _H1_RE.match(text):
-            lines.append(f"# {text}")
-        elif style.startswith("heading 2") or style.startswith("heading 3") or _H2_RE.match(text):
-            lines.append(f"## {text}")
-        else:
-            lines.append(text)
-            lines.append("")  # blank line between body paragraphs
-    return "\n".join(lines)
-
-
-CHUNK_CHARS = 600  # split unstructured sections into ~600-char chunks
-
-def chunk_long_sections(chapters: list[dict]) -> list[dict]:
-    """If a section is too long (no internal structure), split it into N reader-pages worth of chunks."""
+# ── Post-processing: normalize section sizes ─────────────────────────────────
+def normalize_sections(chapters: list[dict]) -> list[dict]:
+    """
+    1. Merge sections that are too short (< MIN_SECTION_CHARS) into the previous one.
+    2. Chunk sections that are too long (> CHUNK_CHARS) into smaller pieces.
+    """
     for ch in chapters:
-        new_secs = []
+        # Step 1: merge short sections upward
+        merged: list[dict] = []
         for sec in ch["sections"]:
             content = sec["content"].strip()
-            if len(content) <= CHUNK_CHARS * 1.5:
-                new_secs.append(sec)
+            if not content:
                 continue
-            # Split on paragraph breaks if any, else by char count
+            if merged and len(content) < MIN_SECTION_CHARS:
+                merged[-1]["content"] += "\n" + content
+            else:
+                merged.append({"title": sec["title"], "content": content})
+        if not merged:
+            merged = ch["sections"]
+
+        # Step 2: chunk long sections
+        final: list[dict] = []
+        for sec in merged:
+            content = sec["content"].strip()
+            if len(content) <= CHUNK_CHARS * 1.5:
+                final.append(sec)
+                continue
             paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
             buf, chunks = "", []
             for p in paras:
@@ -144,14 +183,15 @@ def chunk_long_sections(chapters: list[dict]) -> list[dict]:
             if buf.strip():
                 chunks.append(buf.strip())
             for i, c in enumerate(chunks):
-                new_secs.append({
+                final.append({
                     "title": f"{sec['title']} ({i+1})" if len(chunks) > 1 else sec["title"],
                     "content": c
                 })
-        ch["sections"] = new_secs
+        ch["sections"] = final
     return chapters
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 def parse_book(filename: str, raw: bytes) -> tuple[str, list[dict]]:
     name = filename.lower()
     if name.endswith(".docx"):
@@ -160,11 +200,10 @@ def parse_book(filename: str, raw: bytes) -> tuple[str, list[dict]]:
     else:
         text = decode_file(raw)
         chapters = parse_md(text) if name.endswith(".md") else parse_txt(text)
-    return text, chunk_long_sections(chapters)
+    return text, normalize_sections(chapters)
 
 
 def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
-    """Call Gemini with only the first CHARS_PER_SECTION characters of content."""
     snippet = content.strip()[:CHARS_PER_SECTION]
     response = zhipu.chat.completions.create(
         model="glm-4-flash",
@@ -173,12 +212,10 @@ def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
             {"role": "user", "content": f"章节：{chapter_title}\n小节：{section_title}\n\n内容（节选）：\n{snippet}"}
         ]
     )
-    raw = response.choices[0].message.content.strip()
-    # extract JSON even if model adds surrounding text
-    m = re.search(r"\{.*\}", raw, re.S)
+    raw_text = response.choices[0].message.content.strip()
+    m = re.search(r"\{.*\}", raw_text, re.S)
     if not m:
-        raise ValueError(f"Invalid JSON from model: {raw}")
-    import json
+        raise ValueError(f"Invalid JSON from model: {raw_text}")
     return json.loads(m.group())
 
 
@@ -191,7 +228,7 @@ async def upload_book(file: UploadFile = File(...)):
         raise HTTPException(400, "只支持 .txt / .md / .docx 文件")
 
     raw = await file.read()
-    if len(raw) > 5 * 1024 * 1024:  # 5 MB limit
+    if len(raw) > 5 * 1024 * 1024:
         raise HTTPException(400, "文件不能超过 5MB")
 
     try:
@@ -204,13 +241,12 @@ async def upload_book(file: UploadFile = File(...)):
     result_chapters = []
     for ch in chapters:
         cards = []
-        for sec in ch["sections"][:20]:  # max 20 sections per chapter
+        for sec in ch["sections"][:20]:
             content = sec["content"].strip()
             if not content:
                 continue
             try:
                 qa = generate_qa(sec["title"], ch["title"], content)
-                # Reader pages: split content into <p> per paragraph, keep full text
                 paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
                 cards.append({
                     "title": sec["title"],
@@ -220,7 +256,6 @@ async def upload_book(file: UploadFile = File(...)):
                     "p": ["".join(f"<p>{p}</p>" for p in paras)]
                 })
             except Exception:
-                # if one section fails, skip it rather than failing the whole book
                 continue
 
         if cards:
