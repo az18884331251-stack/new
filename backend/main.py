@@ -97,13 +97,13 @@ def parse_txt(text: str) -> list[dict]:
 
 
 def docx_to_text(raw: bytes) -> str:
-    """Extract plain text from .docx, preserving Heading 1/2 as # / ## markers so parse_md can split."""
+    """Extract plain text from .docx, preserving Heading 1/2 as # / ## markers so parse_md can split.
+    Each non-heading paragraph is followed by a blank line so parse_txt's blank-line splitter works."""
     doc = Document(io.BytesIO(raw))
     lines = []
     for p in doc.paragraphs:
         text = p.text.strip()
         if not text:
-            lines.append("")
             continue
         style = (p.style.name or "").lower() if p.style else ""
         if style.startswith("heading 1") or style == "title":
@@ -112,19 +112,50 @@ def docx_to_text(raw: bytes) -> str:
             lines.append(f"## {text}")
         else:
             lines.append(text)
+            lines.append("")  # blank line between paragraphs
     return "\n".join(lines)
+
+
+CHUNK_CHARS = 600  # split unstructured sections into ~600-char chunks
+
+def chunk_long_sections(chapters: list[dict]) -> list[dict]:
+    """If a section is too long (no internal structure), split it into N reader-pages worth of chunks."""
+    for ch in chapters:
+        new_secs = []
+        for sec in ch["sections"]:
+            content = sec["content"].strip()
+            if len(content) <= CHUNK_CHARS * 1.5:
+                new_secs.append(sec)
+                continue
+            # Split on paragraph breaks if any, else by char count
+            paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
+            buf, chunks = "", []
+            for p in paras:
+                if len(buf) + len(p) > CHUNK_CHARS and buf:
+                    chunks.append(buf.strip())
+                    buf = p
+                else:
+                    buf = (buf + "\n" + p) if buf else p
+            if buf.strip():
+                chunks.append(buf.strip())
+            for i, c in enumerate(chunks):
+                new_secs.append({
+                    "title": f"{sec['title']} ({i+1})" if len(chunks) > 1 else sec["title"],
+                    "content": c
+                })
+        ch["sections"] = new_secs
+    return chapters
 
 
 def parse_book(filename: str, raw: bytes) -> tuple[str, list[dict]]:
     name = filename.lower()
     if name.endswith(".docx"):
         text = docx_to_text(raw)
-        # Use MD parser if headings detected, else fall back to TXT chapter detection
-        return text, (parse_md(text) if re.search(r"^#+ ", text, re.M) else parse_txt(text))
-    text = decode_file(raw)
-    if name.endswith(".md"):
-        return text, parse_md(text)
-    return text, parse_txt(text)
+        chapters = parse_md(text) if re.search(r"^#+ ", text, re.M) else parse_txt(text)
+    else:
+        text = decode_file(raw)
+        chapters = parse_md(text) if name.endswith(".md") else parse_txt(text)
+    return text, chunk_long_sections(chapters)
 
 
 def generate_qa(section_title: str, chapter_title: str, content: str) -> dict:
@@ -168,17 +199,20 @@ async def upload_book(file: UploadFile = File(...)):
     result_chapters = []
     for ch in chapters:
         cards = []
-        for sec in ch["sections"][:6]:  # max 6 sections per chapter
-            if not sec["content"].strip():
+        for sec in ch["sections"][:20]:  # max 20 sections per chapter
+            content = sec["content"].strip()
+            if not content:
                 continue
             try:
-                qa = generate_qa(sec["title"], ch["title"], sec["content"])
+                qa = generate_qa(sec["title"], ch["title"], content)
+                # Reader pages: split content into <p> per paragraph, keep full text
+                paras = [p.strip() for p in re.split(r"\n+", content) if p.strip()]
                 cards.append({
                     "title": sec["title"],
                     "q": qa.get("question", sec["title"] + "的核心内容是什么？"),
                     "a": qa.get("answer", ""),
                     "ps": 1,
-                    "p": [f"<p>{sec['content'].strip()[:300]}</p>"]
+                    "p": ["".join(f"<p>{p}</p>" for p in paras)]
                 })
             except Exception:
                 # if one section fails, skip it rather than failing the whole book
