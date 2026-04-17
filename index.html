@@ -2568,8 +2568,9 @@
       closeModal('importModal');
 
     } catch (e) {
-      // backend unavailable — fall back to client-side parsing
-      if (e instanceof TypeError && e.message.includes('fetch')) {
+      // backend unavailable (localhost, CORS, mixed content, network) — fall back to client-side
+      const isNetworkError = e instanceof TypeError || e.name === 'TypeError';
+      if (isNetworkError) {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = ev.target.result;
