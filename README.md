@@ -62,13 +62,34 @@ ZhipuAI API Key 可在 [open.bigmodel.cn](https://open.bigmodel.cn) 免费注册
 const BACKEND_URL = 'http://localhost:8000';
 ```
 
-## 部署到 Railway
+## Fork 后完整部署指南
 
-1. Fork 本仓库
-2. 在 [railway.app](https://railway.app) 新建项目，选择 GitHub 仓库
-3. Root Directory 设置为 `backend`
-4. 添加环境变量 `ZHIPUAI_API_KEY`
-5. 部署完成后，将 Railway 域名填入 `index.html` 的 `BACKEND_URL`
+### 第一步：Fork 仓库
+
+点击右上角 **Fork**，将项目复制到你自己的账号。
+
+### 第二步：部署后端到 Railway
+
+1. 登录 [railway.app](https://railway.app)，新建项目 → Deploy from GitHub repo → 选择 fork 后的仓库
+2. **Root Directory** 设置为 `backend`
+3. 在 Variables 里添加环境变量：
+   ```
+   ZHIPUAI_API_KEY=your_key_here
+   ```
+4. 部署完成后，在 Settings → Networking → Generate Domain，复制生成的域名（格式如 `https://xxx.up.railway.app`）
+
+### 第三步：修改前端后端地址
+
+打开 `index.html`，找到第 2568 行，将 `BACKEND_URL` 改为你自己的 Railway 域名：
+
+```js
+// 改这一行
+const BACKEND_URL = 'https://你的railway域名.up.railway.app';
+```
+
+### 第四步：开启 GitHub Pages
+
+在 Fork 后的仓库 → Settings → Pages → Source 选择 `main` 分支，保存后即可通过 `https://你的用户名.github.io/skip-read/` 访问。
 
 ## 支持的文档格式
 
