@@ -2,7 +2,7 @@
 
 > 上传一本书，AI 自动为每个章节生成一张 QA 卡片，帮你快速判断"这章值不值得读"。
 
-**在线体验** → [az18884331251-stack.github.io/skip-read](https://az18884331251-stack.github.io/skip-read/)
+**在线体验** → [Ocelot-UXUI.github.io/skip-read](https://Ocelot-UXUI.github.io/skip-read/)
 
 ---
 
